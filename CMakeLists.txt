@@ -97,6 +97,7 @@ if(APPLE)
     set(DYNAMIC_LOOKUP "-undefined dynamic_lookup")
 endif()
 
+# Link against CUDA libs and pybind11; use keyword signature to match CUDA's linkage
 target_link_libraries(diffvg PRIVATE ${DYNAMIC_LOOKUP} pybind11::pybind11)
 
 # RPATH settings
