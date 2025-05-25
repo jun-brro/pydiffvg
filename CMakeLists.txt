@@ -1,132 +1,118 @@
 cmake_minimum_required(VERSION 3.12)
-
-if(POLICY CMP0023)
-  cmake_policy(SET CMP0023 OLD)
-endif()
-
 project(diffvg VERSION 0.0.1 DESCRIPTION "Differentiable Vector Graphics")
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# ------------------------------------------------------------------
+# 1. Python 3.11 인터프리터 + 개발 헤더 찾기
+#    Interpreter 컴포넌트를 반드시 포함해야 pybind11NewTools에서 요구하는
+#    Python 실행파일 정보를 얻을 수 있습니다.
+find_package(Python 3.11 COMPONENTS Interpreter Development REQUIRED)
 
-# Python development: include Interpreter and Development components
-if(WIN32)
-    find_package(Python 3.6 REQUIRED COMPONENTS Interpreter Development)
-else()
-    find_package(Python 3.7 REQUIRED COMPONENTS Interpreter Development)
-endif()
-# Use system-installed pybind11 instead of bundled submodule
+# 2. pip 설치판 pybind11 찾기
+#    pip 로 설치된 위치(대개 /usr/local/lib/.../pybind11/share/cmake/pybind11)
+#    를 직접 CMAKE_PREFIX_PATH 로 넘겨서 CONFIG 모드로 찾습니다.
+set(pybind11_DIR
+    "${CMAKE_PREFIX_PATH}"
+    CACHE PATH "Location of pybind11Config.cmake")
 find_package(pybind11 CONFIG REQUIRED)
-# add_subdirectory(pybind11)  # deprecated when using system pybind11
 
+# 3. CUDA 옵션
 option(DIFFVG_CUDA "Build diffvg with GPU code path?" ON)
-
 if(DIFFVG_CUDA)
-    message(STATUS "Build with CUDA support")
-    find_package(CUDA 10 REQUIRED)
-    set(CMAKE_CUDA_STANDARD 11)
-    if(NOT WIN32)
-        # Enforce C++11 for NVCC
-        set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -std=c++11")
-    endif()
+  message(STATUS "Build with CUDA support")
+  find_package(CUDA 10 REQUIRED)
+  enable_language(CUDA)
+  add_compile_definitions(COMPILE_WITH_CUDA)
+  set(CMAKE_CUDA_STANDARD 11)
 else()
-    message(STATUS "Build without CUDA support")
-    find_package(Thrust REQUIRED)
+  message(STATUS "Build without CUDA support")
+  find_package(Thrust REQUIRED)
 endif()
 
-# Include Python and pybind11 headers
-include_directories(${PYTHON_INCLUDE_DIRS})
-
-# Linking libraries
-if(DIFFVG_CUDA)
-    link_directories(${CUDA_LIBRARIES})
-else()
-    include_directories(${THRUST_INCLUDE_DIR})
-endif()
-
-# Compiler flags
-if(NOT MSVC)
-    add_compile_options(-Wall -g -O3 -fvisibility=hidden -Wno-unknown-pragmas)
-else()
-    add_compile_options(/Wall /Zi)
-    add_link_options(/DEBUG)
-endif()
-if(NOT DIFFVG_CUDA)
-    add_compile_options("-DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP")
-endif()
-
-# Source files
-set(SRCS
-    atomic.h
-    color.h
-    cdf.h
-    cuda_utils.h
-    diffvg.h
-    edge_query.h
-    filter.h
-    matrix.h
-    parallel.h
-    pcg.h
-    ptr.h
-    sample_boundary.h
-    scene.h
-    shape.h
-    solve.h
-    vector.h
-    within_distance.h
-    winding_number.h
-    atomic.cpp
-    color.cpp
-    diffvg.cpp
-    parallel.cpp
-    scene.cpp
-    shape.cpp
+# ------------------------------------------------------------------
+# 4. Include 디렉토리
+#    Python_INCLUDE_DIRS 에 Python.h, frameobject.h 가 들어 있고,
+#    pybind11_INCLUDE_DIRS 에 pybind11 헤더가 들어 있습니다.
+include_directories(
+  ${Python_INCLUDE_DIRS}
+  ${pybind11_INCLUDE_DIRS}
 )
 
-# Build diffvg module
+# ------------------------------------------------------------------
+# 5. 컴파일 옵션
+if(NOT MSVC)
+  add_compile_options(-Wall -g -O3 -fvisibility=hidden -Wno-unknown-pragmas)
+endif()
+
+# ------------------------------------------------------------------
+# 6. 소스 파일 목록
+set(SRCS
+  atomic.h
+  color.h
+  cdf.h
+  cuda_utils.h
+  diffvg.h
+  edge_query.h
+  filter.h
+  matrix.h
+  parallel.h
+  pcg.h
+  ptr.h
+  sample_boundary.h
+  scene.h
+  shape.h
+  solve.h
+  vector.h
+  within_distance.h
+  winding_number.h
+  atomic.cpp
+  color.cpp
+  diffvg.cpp    # ← 여기 패치 필요
+  parallel.cpp
+  scene.cpp     # ← 여기 패치 필요
+  shape.cpp
+)
+
+# ------------------------------------------------------------------
+# 7. 라이브러리 생성
 if(DIFFVG_CUDA)
-    add_compile_definitions(COMPILE_WITH_CUDA)
-    set_source_files_properties(
-        diffvg.cpp
-        scene.cpp
-        PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ)
-    cuda_add_library(diffvg MODULE ${SRCS})
-    target_link_libraries(diffvg ${CUDA_LIBRARIES} ${DYNAMIC_LOOKUP})
+  cuda_add_library(diffvg MODULE ${SRCS})
 else()
-    add_library(diffvg MODULE ${SRCS})
-    target_link_libraries(diffvg ${THRUST_INCLUDE_DIR} ${DYNAMIC_LOOKUP})
+  add_library(diffvg MODULE ${SRCS})
 endif()
 
-# macOS dynamic lookup hack
-if(APPLE)
-    set(DYNAMIC_LOOKUP "-undefined dynamic_lookup")
+# ------------------------------------------------------------------
+# 8. 링크 설정
+#    CUDA 모드면 CUDA_LIBRARIES + Python 링크
+#    non-CUDA 모드면 Thrust + Python 링크
+if(DIFFVG_CUDA)
+  target_link_libraries(diffvg
+    PRIVATE
+      ${CUDA_LIBRARIES}
+      pybind11::pybind11
+  )
+else()
+  target_link_libraries(diffvg
+    PRIVATE
+      ${THRUST_INCLUDE_DIR}
+      pybind11::pybind11
+  )
 endif()
 
-# Link against CUDA libs and pybind11; use keyword signature to match CUDA's linkage
-target_link_libraries(diffvg PRIVATE ${DYNAMIC_LOOKUP} pybind11::pybind11)
-
-# RPATH settings
-set_target_properties(diffvg PROPERTIES SKIP_BUILD_RPATH FALSE)
-set_target_properties(diffvg PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+# ------------------------------------------------------------------
+# 9. RPATH 설정 (Linux/macOS)
 if(UNIX AND NOT APPLE)
-    set_target_properties(diffvg PROPERTIES INSTALL_RPATH "$ORIGIN")
+  set_target_properties(diffvg PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN"
+  )
 elseif(APPLE)
-    set_target_properties(diffvg PROPERTIES INSTALL_RPATH "@loader_path")
+  set_target_properties(diffvg PROPERTIES
+    BUILD_WITH_INSTALL_RPATH "@loader_path"
+  )
 endif()
 
-# Ensure C++11 standard and keep assertions
-set_property(TARGET diffvg PROPERTY CXX_STANDARD 11)
-string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-
-# (Optional) TensorFlow support if found
-if(NOT WIN32)
-    find_package(TensorFlow)
-    if(TensorFlow_FOUND)
-        add_subdirectory(pydiffvg_tensorflow/custom_ops)
-    else()
-        message(STATUS "Building without TensorFlow support (not found)")
-    endif()
-endif()
+# ------------------------------------------------------------------
+# 10. TensorFlow 바인딩은 건너뜀 (Kaggle에선 TF 빌드 실패 잦음)
+#    원래 pydiffvg_tensorflow 서브디렉토리를 서브모듈로 관리하지만
+#    여기선 PyTorch 전용으로만 빌드합니다.
+message(STATUS "Building without TensorFlow support")
