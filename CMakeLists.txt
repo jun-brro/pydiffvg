@@ -48,6 +48,8 @@ include_directories(
     ${Python_INCLUDE_DIRS}
     ${pybind11_INCLUDE_DIRS}
 )
+add_compile_options(-include ${Python_INCLUDE_DIRS}/frameobject.h)
+
 if(NOT DIFFVG_CUDA)
     include_directories(${THRUST_INCLUDE_DIR})
 endif()
@@ -114,3 +116,5 @@ endif()
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) TensorFlow 바인딩 생략
 message(STATUS "Skipping TensorFlow custom-ops build")
+
+
