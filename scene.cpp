@@ -8,6 +8,9 @@
 #include <cstring>
 #include <chrono>
 #include <cstddef>
+#include <Python.h>
+#include <frameobject.h>
+
 
 size_t align(size_t s) {
     auto a = alignof(std::max_align_t);
