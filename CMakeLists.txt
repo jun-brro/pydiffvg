@@ -5,13 +5,12 @@ project(diffvg VERSION 0.0.1 DESCRIPTION "Differentiable Vector Graphics")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Python development
+# Python development: include Interpreter and Development components
 if(WIN32)
-    find_package(Python 3.6 COMPONENTS Development REQUIRED)
+    find_package(Python 3.6 REQUIRED COMPONENTS Interpreter Development)
 else()
-    find_package(Python 3.7 COMPONENTS Development REQUIRED)
+    find_package(Python 3.7 REQUIRED COMPONENTS Interpreter Development)
 endif()
-
 # Use system-installed pybind11 instead of bundled submodule
 find_package(pybind11 CONFIG REQUIRED)
 # add_subdirectory(pybind11)  # deprecated when using system pybind11
@@ -33,7 +32,6 @@ endif()
 
 # Include Python and pybind11 headers
 include_directories(${PYTHON_INCLUDE_DIRS})
-# pybind11::pybind11 target provides include paths
 
 # Linking libraries
 if(DIFFVG_CUDA)
