@@ -12,6 +12,16 @@ else()
 endif()
 add_subdirectory(pybind11)
 
+find_package(pybind11 CONFIG REQUIRED)
+
+include_directories(SYSTEM ${pybind11_INCLUDE_DIRS})
+
+if (NOT TARGET pybind11::pybind11)
+  add_library(pybind11::pybind11 INTERFACE IMPORTED)
+  set_property(TARGET pybind11::pybind11
+               PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${pybind11_INCLUDE_DIRS}")
+endif()
+
 option(DIFFVG_CUDA "Build diffvg with GPU code path?" ON)
 
 if(DIFFVG_CUDA)
