@@ -21,8 +21,6 @@
 #include <pybind11/stl.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
-#include <Python.h>
-#include <frameobject.h>
 
 
 namespace py = pybind11;
