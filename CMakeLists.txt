@@ -18,9 +18,10 @@ find_package(pybind11 CONFIG REQUIRED)
 # 3. CUDA 옵션
 option(DIFFVG_CUDA "Build diffvg with GPU code path?" ON)
 if(DIFFVG_CUDA)
-  message(STATUS "Build with CUDA support")
-  find_package(CUDA 10 REQUIRED)
-  enable_language(CUDA)
+    message(STATUS "Build with CUDA support (modern CUDAToolkit)")
+    # legacy FindCUDA 대신, CMake 3.17+ 내장 모듈인 FindCUDAToolkit 사용
+    find_package(CUDAToolkit REQUIRED)
+    enable_language(CUDA)
   add_compile_definitions(COMPILE_WITH_CUDA)
   set(CMAKE_CUDA_STANDARD 11)
 else()
@@ -86,13 +87,13 @@ endif()
 #    non-CUDA 모드면 Thrust + Python 링크
 if(DIFFVG_CUDA)
   target_link_libraries(diffvg
-    PRIVATE
-      ${CUDA_LIBRARIES}
+    PUBLIC
+      CUDAToolkit::cudart   # CUDAToolkit에서 가져온 CUDA 런타임
       pybind11::pybind11
   )
 else()
   target_link_libraries(diffvg
-    PRIVATE
+    PUBLIC
       ${THRUST_INCLUDE_DIR}
       pybind11::pybind11
   )
