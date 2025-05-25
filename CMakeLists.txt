@@ -87,20 +87,10 @@ if(DIFFVG_CUDA)
         scene.cpp
         PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ)
     cuda_add_library(diffvg MODULE ${SRCS})
-    # CUDA mode일 때 CUDA 라이브러리 + dynamic lookup을 한 번에 PRIVATE로 링크
-    target_link_libraries(diffvg 
-        PRIVATE 
-            ${CUDA_LIBRARIES}
-            ${DYNAMIC_LOOKUP}
-    )
+    target_link_libraries(diffvg ${CUDA_LIBRARIES} ${DYNAMIC_LOOKUP})
 else()
     add_library(diffvg MODULE ${SRCS})
-    # non-CUDA 모드면 Thrust와 dynamic lookup만 PRIVATE로 링크
-    target_link_libraries(diffvg 
-        PRIVATE 
-            ${THRUST_INCLUDE_DIR}
-            ${DYNAMIC_LOOKUP}
-    )
+    target_link_libraries(diffvg ${THRUST_INCLUDE_DIR} ${DYNAMIC_LOOKUP})
 endif()
 
 # macOS dynamic lookup hack
