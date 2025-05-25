@@ -1,99 +1,126 @@
-# Adapted from https://github.com/pybind/cmake_example/blob/master/setup.py
-import os
-import re
-import sys
-import platform
-import subprocess
-import importlib
-from sysconfig import get_paths
+cmake_minimum_required(VERSION 3.12)
 
-import importlib
-from setuptools import setup, Extension
-from setuptools.command.build_ext import build_ext
-from setuptools.command.install import install
-from distutils.sysconfig import get_config_var
-from distutils.version import LooseVersion
+project(diffvg VERSION 0.0.1 DESCRIPTION "Differentiable Vector Graphics")
 
-class CMakeExtension(Extension):
-    def __init__(self, name, sourcedir, build_with_cuda):
-        Extension.__init__(self, name, sources=[])
-        self.sourcedir = os.path.abspath(sourcedir)
-        self.build_with_cuda = build_with_cuda
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-class Build(build_ext):
-    def run(self):
-        try:
-            out = subprocess.check_output(['cmake', '--version'])
-        except OSError:
-            raise RuntimeError("CMake must be installed to build the following extensions: " +
-                               ", ".join(e.name for e in self.extensions))
+# Python development: include Interpreter and Development components
+if(WIN32)
+    find_package(Python 3.6 REQUIRED COMPONENTS Interpreter Development)
+else()
+    find_package(Python 3.7 REQUIRED COMPONENTS Interpreter Development)
+endif()
+# Use system-installed pybind11 instead of bundled submodule
+find_package(pybind11 CONFIG REQUIRED)
+# add_subdirectory(pybind11)  # deprecated when using system pybind11
 
-        super().run()
+option(DIFFVG_CUDA "Build diffvg with GPU code path?" ON)
 
-    def build_extension(self, ext):
-        if isinstance(ext, CMakeExtension):
-            extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
-            info = get_paths()
-            include_path = info['include']
-            cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
-                          '-DPYTHON_LIBRARY=' + get_config_var('LIBDIR'),
-                          '-DPYTHON_INCLUDE_PATH=' + include_path]
+if(DIFFVG_CUDA)
+    message(STATUS "Build with CUDA support")
+    find_package(CUDA 10 REQUIRED)
+    set(CMAKE_CUDA_STANDARD 11)
+    if(NOT WIN32)
+        # Enforce C++11 for NVCC
+        set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -std=c++11")
+    endif()
+else()
+    message(STATUS "Build without CUDA support")
+    find_package(Thrust REQUIRED)
+endif()
 
-            cfg = 'Debug' if self.debug else 'Release'
-            build_args = ['--config', cfg]
+# Include Python and pybind11 headers
+include_directories(${PYTHON_INCLUDE_DIRS})
 
-            if platform.system() == "Windows":
-                cmake_args += ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir),
-                               '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
-                if sys.maxsize > 2**32:
-                    cmake_args += ['-A', 'x64']
-                build_args += ['--', '/m']
-            else:
-                cmake_args += ['-DCMAKE_BUILD_TYPE=' + cfg]
-                build_args += ['--', '-j8']
+# Linking libraries
+if(DIFFVG_CUDA)
+    link_directories(${CUDA_LIBRARIES})
+else()
+    include_directories(${THRUST_INCLUDE_DIR})
+endif()
 
-            if ext.build_with_cuda:
-                cmake_args += ['-DDIFFVG_CUDA=1']
-            else:
-                cmake_args += ['-DDIFFVG_CUDA=0']
+# Compiler flags
+if(NOT MSVC)
+    add_compile_options(-Wall -g -O3 -fvisibility=hidden -Wno-unknown-pragmas)
+else()
+    add_compile_options(/Wall /Zi)
+    add_link_options(/DEBUG)
+endif()
+if(NOT DIFFVG_CUDA)
+    add_compile_options("-DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP")
+endif()
 
-            env = os.environ.copy()
-            env['CXXFLAGS'] = '{} -DVERSION_INFO=\\"{}\\"'.format(env.get('CXXFLAGS', ''),
-                                                                  self.distribution.get_version())
-            if not os.path.exists(self.build_temp):
-                os.makedirs(self.build_temp)
-            subprocess.check_call(['cmake', ext.sourcedir] + cmake_args, cwd=self.build_temp, env=env)
-            subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
-        else:
-            super().build_extension(ext)
+# Source files
+set(SRCS
+    atomic.h
+    color.h
+    cdf.h
+    cuda_utils.h
+    diffvg.h
+    edge_query.h
+    filter.h
+    matrix.h
+    parallel.h
+    pcg.h
+    ptr.h
+    sample_boundary.h
+    scene.h
+    shape.h
+    solve.h
+    vector.h
+    within_distance.h
+    winding_number.h
+    atomic.cpp
+    color.cpp
+    diffvg.cpp
+    parallel.cpp
+    scene.cpp
+    shape.cpp
+)
 
-torch_spec = importlib.util.find_spec("torch")
-tf_spec = importlib.util.find_spec("tensorflow")
-packages = []
-build_with_cuda = False
-if torch_spec is not None:
-    packages.append('pydiffvg')
-    import torch
-    if torch.cuda.is_available():
-        build_with_cuda = True
-if tf_spec is not None and sys.platform != 'win32':
-    packages.append('pydiffvg_tensorflow')
-    if not build_with_cuda:
-        import tensorflow as tf
-        if tf.test.is_gpu_available(cuda_only=True, min_cuda_compute_capability=None):
-            build_with_cuda = True
-if len(packages) == 0:
-    print('Error: PyTorch or Tensorflow must be installed. For Windows platform only PyTorch is supported.')
-    exit()
-# Override build_with_cuda with environment variable
-if 'DIFFVG_CUDA' in os.environ:
-    build_with_cuda = os.environ['DIFFVG_CUDA'] == '1'
+# Build diffvg module
+if(DIFFVG_CUDA)
+    add_compile_definitions(COMPILE_WITH_CUDA)
+    set_source_files_properties(
+        diffvg.cpp
+        scene.cpp
+        PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ
+    )
+    cuda_add_library(diffvg MODULE ${SRCS})
+else()
+    add_library(diffvg MODULE ${SRCS})
+endif()
 
-setup(name = 'diffvg',
-      version = '0.0.1',
-      install_requires = ["svgpathtools"],
-      description = 'Differentiable Vector Graphics',
-      ext_modules = [CMakeExtension('diffvg', '', build_with_cuda)],
-      cmdclass = dict(build_ext=Build, install=install),
-      packages = packages,
-      zip_safe = False)
+# macOS dynamic lookup hack
+if(APPLE)
+    set(DYNAMIC_LOOKUP "-undefined dynamic_lookup")
+endif()
+
+target_link_libraries(diffvg PRIVATE ${DYNAMIC_LOOKUP} pybind11::pybind11)
+
+# RPATH settings
+set_target_properties(diffvg PROPERTIES SKIP_BUILD_RPATH FALSE)
+set_target_properties(diffvg PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+if(UNIX AND NOT APPLE)
+    set_target_properties(diffvg PROPERTIES INSTALL_RPATH "$ORIGIN")
+elseif(APPLE)
+    set_target_properties(diffvg PROPERTIES INSTALL_RPATH "@loader_path")
+endif()
+
+# Ensure C++11 standard and keep assertions
+set_property(TARGET diffvg PROPERTY CXX_STANDARD 11)
+string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+string(REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+
+# (Optional) TensorFlow support if found
+if(NOT WIN32)
+    find_package(TensorFlow)
+    if(TensorFlow_FOUND)
+        add_subdirectory(pydiffvg_tensorflow/custom_ops)
+    else()
+        message(STATUS "Building without TensorFlow support (not found)")
+    endif()
+endif()
