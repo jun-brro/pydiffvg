@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.17)
+# Allow empty CUDA_ARCHITECTURES (legacy behavior), suppress CMP0104 warning
+if(POLICY CMP0104)
+  cmake_policy(SET CMP0104 OLD)
+endif()
+
 project(diffvg VERSION 0.0.1 DESCRIPTION "Differentiable Vector Graphics")
 
 # ------------------------------------------------------------------
@@ -12,8 +17,8 @@ set(pybind11_DIR "${CMAKE_PREFIX_PATH}"
 find_package(pybind11 CONFIG REQUIRED)
 
 # ------------------------------------------------------------------
-# 3) CUDA 옵션 (modern FindCUDAToolkit 사용)
-option(DIFFVG_CUDA "Build with GPU code path?" ON)
+# 3) CUDA 옵션 (modern FindCUDAToolkit)
+option(DIFFVG_CUDA "Build diffvg with GPU code path?" ON)
 if(DIFFVG_CUDA)
     message(STATUS "Build with CUDA support (modern CUDAToolkit)")
     find_package(CUDAToolkit REQUIRED)
@@ -56,10 +61,9 @@ set(SRCS
 
 # ------------------------------------------------------------------
 # 7) 모듈 라이브러리 생성
-#    enable_language(CUDA) 덕분에 .cpp/.cu 모두 처리됨
 add_library(diffvg MODULE ${SRCS})
 if(DIFFVG_CUDA)
-    # device 심볼 자동 연결, PIC 설정
+    # CUDA 기호 해석 및 PIC 설정
     set_target_properties(diffvg PROPERTIES
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
         POSITION_INDEPENDENT_CODE ON
@@ -71,13 +75,12 @@ endif()
 if(DIFFVG_CUDA)
     target_link_libraries(diffvg
         PUBLIC
-            CUDAToolkit::cudart
+            CUDA::cudart          # modern CUDAToolkit imported target
             pybind11::pybind11
     )
 else()
     target_link_libraries(diffvg
         PUBLIC
-            ${THRUST_INCLUDE_DIR}
             pybind11::pybind11
     )
 endif()
