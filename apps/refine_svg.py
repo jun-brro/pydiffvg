@@ -39,6 +39,18 @@ def refine_svg_in_memory(svg_content: str,
     canvas_w, canvas_h, shapes, shape_groups = pydiffvg.svg_to_scene(svg_path)
     os.remove(svg_path)  # 더 이상 필요 없는 임시 파일
 
+    # 3.5) target 해상도를 canvas 해상도에 맞추기
+    # torch.nn.functional.interpolate를 사용해 (H,W)를 (canvas_h,canvas_w)로 보간
+    import torch.nn.functional as F
+    # target: [1, 3, H_target, W_target]
+    if target.shape[2] != canvas_h or target.shape[3] != canvas_w:
+        target = F.interpolate(
+            target,
+            size=(canvas_h, canvas_w),
+            mode='bilinear',
+            align_corners=False
+        )
+
     # 4) LPIPS 셋업
     perception_loss = ttools.modules.LPIPS().to(pydiffvg.get_device())
 
