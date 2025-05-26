@@ -45,11 +45,17 @@ def refine_svg_in_memory(svg_content: str,
     # 5) 최적화 변수 준비
     points_vars = []
     for shape in shapes:
-        pts = getattr(shape, 'points', None)
+        # C++ 확장 타입인 Rect 같은 경우 getattr이 제대로 동작하지 않을 수 있으므로,
+        # 직접 예외처리로 걸러낸다.
+        try:
+            pts = shape.points
+        except AttributeError:
+            # points 속성이 없으면 건너뜀
+            continue
         if isinstance(pts, torch.Tensor):
             pts.requires_grad = True
             points_vars.append(pts)
-    
+
     color_vars = []
     for group in shape_groups:
         col = getattr(group, 'fill_color', None)
