@@ -45,51 +45,56 @@ def refine_svg_in_memory(svg_content: str,
     # 5) 최적화 변수 준비
     points_vars = []
     for shape in shapes:
-        if hasattr(shape, "points"):
-            shape.points.requires_grad = True
-            points_vars.append(shape.points)
+        pts = getattr(shape, 'points', None)
+        if isinstance(pts, torch.Tensor):
+            pts.requires_grad = True
+            points_vars.append(pts)
     
     color_vars = []
     for group in shape_groups:
-        # fill_color가 존재하고 Tensor인 경우만
-        if getattr(group, "fill_color", None) is not None:
-            group.fill_color.requires_grad = True
-            color_vars.append(group.fill_color)
+        col = getattr(group, 'fill_color', None)
+        if isinstance(col, torch.Tensor):
+            col.requires_grad = True
+            color_vars.append(col)
     
     points_optim = torch.optim.Adam(points_vars, lr=1.0)
-    color_optim  = torch.optim.Adam(color_vars, lr=0.01)
+    color_optim  = torch.optim.Adam(color_vars,  lr=0.01)
 
     render = pydiffvg.RenderFunction.apply
 
     # 6) 반복 최적화
+    # 6) 반복 최적화
     for t in range(num_iter):
+        # 1) gradient 초기화
         points_optim.zero_grad()
         color_optim.zero_grad()
-
+    
+        # 2) scene serialization & rendering
         scene_args = pydiffvg.RenderFunction.serialize_scene(
             canvas_w, canvas_h, shapes, shape_groups)
         img = render(canvas_w, canvas_h, 2, 2, t, None, *scene_args)
-
-        # alpha compositing
+    
+        # 3) alpha compositing
         img_rgb = img[:, :, 3:4] * img[:, :, :3] + \
                   torch.ones_like(img[:, :, :3]) * (1 - img[:, :, 3:4])
-
-        # HWC → NCHW batch
+    
+        # 4) HWC → NCHW batch 차원 추가
         img_t = img_rgb.unsqueeze(0).permute(0, 3, 1, 2)
-
-        # loss
+    
+        # 5) 손실 계산
         if use_lpips_loss:
             loss = perception_loss(img_t, target)
         else:
             loss = (img_t - target).pow(2).mean()
-
+    
+        # 6) 역전파 & 업데이트
         loss.backward()
         points_optim.step()
         color_optim.step()
-
-        # color clamp
-        for g in shape_groups:
-            g.fill_color.data.clamp_(0.0, 1.0)
+    
+        # 7) color_vars에 담긴 텐서만 [0,1] 범위로 clamp
+        for col in color_vars:
+            col.data.clamp_(0.0, 1.0)
 
     # 7) 최종 SVG를 또 임시 파일에 쓰고 읽어오기
     tmp_out = tempfile.NamedTemporaryFile('r', suffix='.svg', delete=False)
