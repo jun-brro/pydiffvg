@@ -4,6 +4,8 @@ if(POLICY CMP0104)
 endif()
 project(diffvg VERSION 0.0.1 DESCRIPTION "Differentiable Vector Graphics")
 
+set(PYBIND11_PYTHON_ABI "" CACHE STRING "Disable pybind11 limited API" FORCE)
+
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
