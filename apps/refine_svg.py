@@ -1,115 +1,106 @@
-import pydiffvg
-import argparse
-import ttools.modules
+# apps/refine_svg.py
+import os
+import io
+import tempfile
 import torch
+import numpy as np
+import pydiffvg
+import ttools.modules
+import skimage
 import skimage.io
 
 gamma = 1.0
 
-def main(args):
+def refine_svg_in_memory(svg_content: str,
+                         target_image: np.ndarray,
+                         num_iter: int = 250,
+                         use_lpips_loss: bool = False) -> str:
+    """
+    svg_content: SVG 파일 내용 (string)
+    target_image: H×W×C numpy array, float in [0,1] or uint8
+    num_iter: 최적화 반복 횟수
+    use_lpips_loss: LPIPS 손실 사용 여부
+    returns: 최종 refined SVG 문자열
+    """
+    # 1) 임시 SVG 파일로 쓰기
+    tmp_svg = tempfile.NamedTemporaryFile('w', suffix='.svg', delete=False)
+    tmp_svg.write(svg_content)
+    tmp_svg.close()
+    svg_path = tmp_svg.name
+
+    # 2) target_image → torch tensor (1×3×H×W)
+    if target_image.dtype != np.float32:
+        target_image = target_image.astype(np.float32) / 255.0
+    target = torch.from_numpy(target_image).to(torch.float32)
+    # NHWC → NCHW, batch 차원 추가
+    target = target.unsqueeze(0).permute(0, 3, 1, 2).to(pydiffvg.get_device()).pow(gamma)
+
+    # 3) SVG → scene
+    canvas_w, canvas_h, shapes, shape_groups = pydiffvg.svg_to_scene(svg_path)
+    os.remove(svg_path)  # 더 이상 필요 없는 임시 파일
+
+    # 4) LPIPS 셋업
     perception_loss = ttools.modules.LPIPS().to(pydiffvg.get_device())
 
-    target = torch.from_numpy(skimage.io.imread(args.target)).to(torch.float32) / 255.0
-    target = target.pow(gamma)
-    target = target.to(pydiffvg.get_device())
-    target = target.unsqueeze(0)
-    target = target.permute(0, 3, 1, 2) # NHWC -> NCHW
+    # 5) 최적화 변수 준비
+    for p in shapes:
+        p.points.requires_grad = True
+    for g in shape_groups:
+        g.fill_color.requires_grad = True
 
-    canvas_width, canvas_height, shapes, shape_groups = \
-        pydiffvg.svg_to_scene(args.svg)
-    scene_args = pydiffvg.RenderFunction.serialize_scene(\
-        canvas_width, canvas_height, shapes, shape_groups)
+    points_optim = torch.optim.Adam([p.points for p in shapes], lr=1.0)
+    color_optim  = torch.optim.Adam([g.fill_color for g in shape_groups], lr=0.01)
 
     render = pydiffvg.RenderFunction.apply
-    img = render(canvas_width, # width
-                 canvas_height, # height
-                 2,   # num_samples_x
-                 2,   # num_samples_y
-                 0,   # seed
-                 None, # bg
-                 *scene_args)
-    # The output image is in linear RGB space. Do Gamma correction before saving the image.
-    pydiffvg.imwrite(img.cpu(), 'results/refine_svg/init.png', gamma=gamma)
 
-    points_vars = []
-    for path in shapes:
-        path.points.requires_grad = True
-        points_vars.append(path.points)
-    color_vars = {}
-    for group in shape_groups:
-        group.fill_color.requires_grad = True
-        color_vars[group.fill_color.data_ptr()] = group.fill_color
-    color_vars = list(color_vars.values())
-
-    # Optimize
-    points_optim = torch.optim.Adam(points_vars, lr=1.0)
-    color_optim = torch.optim.Adam(color_vars, lr=0.01)
-
-    # Adam iterations.
-    for t in range(args.num_iter):
-        print('iteration:', t)
+    # 6) 반복 최적화
+    for t in range(num_iter):
         points_optim.zero_grad()
         color_optim.zero_grad()
-        # Forward pass: render the image.
-        scene_args = pydiffvg.RenderFunction.serialize_scene(\
-            canvas_width, canvas_height, shapes, shape_groups)
-        img = render(canvas_width, # width
-                     canvas_height, # height
-                     2,   # num_samples_x
-                     2,   # num_samples_y
-                     0,   # seed
-                     None, # bg
-                     *scene_args)
-        # Compose img with white background
-        img = img[:, :, 3:4] * img[:, :, :3] + torch.ones(img.shape[0], img.shape[1], 3, device = pydiffvg.get_device()) * (1 - img[:, :, 3:4])
-        # Save the intermediate render.
-        pydiffvg.imwrite(img.cpu(), 'results/refine_svg/iter_{}.png'.format(t), gamma=gamma)
-        img = img[:, :, :3]
-        # Convert img from HWC to NCHW
-        img = img.unsqueeze(0)
-        img = img.permute(0, 3, 1, 2) # NHWC -> NCHW
-        if args.use_lpips_loss:
-            loss = perception_loss(img, target)
+
+        scene_args = pydiffvg.RenderFunction.serialize_scene(
+            canvas_w, canvas_h, shapes, shape_groups)
+        img = render(canvas_w, canvas_h, 2, 2, t, None, *scene_args)
+
+        # alpha compositing
+        img_rgb = img[:, :, 3:4] * img[:, :, :3] + \
+                  torch.ones_like(img[:, :, :3]) * (1 - img[:, :, 3:4])
+
+        # HWC → NCHW batch
+        img_t = img_rgb.unsqueeze(0).permute(0, 3, 1, 2)
+
+        # loss
+        if use_lpips_loss:
+            loss = perception_loss(img_t, target)
         else:
-            loss = (img - target).pow(2).mean()
-        print('render loss:', loss.item())
-    
-        # Backpropagate the gradients.
+            loss = (img_t - target).pow(2).mean()
+
         loss.backward()
-    
-        # Take a gradient descent step.
         points_optim.step()
         color_optim.step()
-        for group in shape_groups:
-            group.fill_color.data.clamp_(0.0, 1.0)
 
-        if t % 10 == 0 or t == args.num_iter - 1:
-            pydiffvg.save_svg('results/refine_svg/iter_{}.svg'.format(t),
-                              canvas_width, canvas_height, shapes, shape_groups)
+        # color clamp
+        for g in shape_groups:
+            g.fill_color.data.clamp_(0.0, 1.0)
 
-    # Render the final result.
-    scene_args = pydiffvg.RenderFunction.serialize_scene(\
-        canvas_width, canvas_height, shapes, shape_groups)
-    img = render(canvas_width, # width
-                 canvas_height, # height
-                 2,   # num_samples_x
-                 2,   # num_samples_y
-                 0,   # seed
-                 None, # bg
-                 *scene_args)
-    # Save the intermediate render.
-    pydiffvg.imwrite(img.cpu(), 'results/refine_svg/final.png'.format(t), gamma=gamma)
-    # Convert the intermediate renderings to a video.
-    from subprocess import call
-    call(["ffmpeg", "-framerate", "24", "-i",
-        "results/refine_svg/iter_%d.png", "-vb", "20M",
-        "results/refine_svg/out.mp4"])
+    # 7) 최종 SVG를 또 임시 파일에 쓰고 읽어오기
+    tmp_out = tempfile.NamedTemporaryFile('r', suffix='.svg', delete=False)
+    tmp_out.close()
+    pydiffvg.save_svg(tmp_out.name, canvas_w, canvas_h, shapes, shape_groups)
 
+    with open(tmp_out.name, 'r') as f:
+        final_svg = f.read()
+    os.remove(tmp_out.name)
+
+    return final_svg
+
+
+# 예시 사용법
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("svg", help="source SVG path")
-    parser.add_argument("target", help="target image path")
-    parser.add_argument("--use_lpips_loss", dest='use_lpips_loss', action='store_true')
-    parser.add_argument("--num_iter", type=int, default=250)
-    args = parser.parse_args()
-    main(args)
+    # 파일 입출력 없이도 이렇게 바로 쓸 수 있다:
+    svg_str = open("input.svg").read()
+    img_np  = skimage.io.imread("input.png")  # 또는 numpy array
+    refined_svg = refine_svg_in_memory(svg_str, img_np,
+                                       num_iter=200,
+                                       use_lpips_loss=True)
+    print(refined_svg)  # 최종 SVG 코드를 stdout 으로 출력
