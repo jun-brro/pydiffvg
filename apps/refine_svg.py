@@ -5,7 +5,6 @@ import tempfile
 import torch
 import numpy as np
 import pydiffvg
-import ttools.modules
 import skimage
 import skimage.io
 
@@ -13,8 +12,7 @@ gamma = 1.0
 
 def refine_svg_in_memory(svg_content: str,
                          target_image: np.ndarray,
-                         num_iter: int = 250,
-                         use_lpips_loss: bool = False) -> str:
+                         num_iter: int = 250) -> str:
     """
     svg_content: SVG 파일 내용 (string)
     target_image: H×W×C numpy array, float in [0,1] or uint8
@@ -50,10 +48,6 @@ def refine_svg_in_memory(svg_content: str,
             mode='bilinear',
             align_corners=False
         )
-
-    # 4) LPIPS 셋업
-    perception_loss = ttools.modules.LPIPS().to(pydiffvg.get_device())
-
     # 5) 최적화 변수 준비
     points_vars = []
     for shape in shapes:
@@ -100,10 +94,7 @@ def refine_svg_in_memory(svg_content: str,
         img_t = img_rgb.unsqueeze(0).permute(0, 3, 1, 2)
     
         # 5) 손실 계산
-        if use_lpips_loss:
-            loss = perception_loss(img_t, target)
-        else:
-            loss = (img_t - target).pow(2).mean()
+        loss = (img_t - target).pow(2).mean()
     
         # 6) 역전파 & 업데이트
         loss.backward()
