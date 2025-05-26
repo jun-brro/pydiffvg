@@ -43,13 +43,21 @@ def refine_svg_in_memory(svg_content: str,
     perception_loss = ttools.modules.LPIPS().to(pydiffvg.get_device())
 
     # 5) 최적화 변수 준비
-    for p in shapes:
-        p.points.requires_grad = True
-    for g in shape_groups:
-        g.fill_color.requires_grad = True
-
-    points_optim = torch.optim.Adam([p.points for p in shapes], lr=1.0)
-    color_optim  = torch.optim.Adam([g.fill_color for g in shape_groups], lr=0.01)
+    points_vars = []
+    for shape in shapes:
+        if hasattr(shape, "points"):
+            shape.points.requires_grad = True
+            points_vars.append(shape.points)
+    
+    color_vars = []
+    for group in shape_groups:
+        # fill_color가 존재하고 Tensor인 경우만
+        if getattr(group, "fill_color", None) is not None:
+            group.fill_color.requires_grad = True
+            color_vars.append(group.fill_color)
+    
+    points_optim = torch.optim.Adam(points_vars, lr=1.0)
+    color_optim  = torch.optim.Adam(color_vars, lr=0.01)
 
     render = pydiffvg.RenderFunction.apply
 
